@@ -4,7 +4,7 @@ import numpy as np
 import math
 from pathlib import Path
 from sklearn.preprocessing import MinMaxScaler, LabelEncoder
-import tensorflow as tf
+#import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
 import altair as alt
