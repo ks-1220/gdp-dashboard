@@ -1,2 +1,8 @@
 streamlit
 pandas
+numpy
+math
+pathlib
+scikit-learn
+tensorflow
+altair

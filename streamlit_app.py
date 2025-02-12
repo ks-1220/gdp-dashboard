@@ -1,151 +1,125 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import math
 from pathlib import Path
+from sklearn.preprocessing import MinMaxScaler, LabelEncoder
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense
+import altair as alt
 
-# Set the title and favicon that appear in the Browser's tab bar.
+# Set Streamlit page config
 st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
+    page_title="Effluent Prediction Dashboard",
+    page_icon="🌊"
 )
 
 # -----------------------------------------------------------------------------
 # Declare some useful functions.
 
 @st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+def load_data():
+    """Load effluent data from a CSV file."""
+    DATA_FILENAME = Path(__file__).parent/'FINAL_SDI CSV FILE.csv'
+    df = pd.read_csv(DATA_FILENAME)
+    df['Date'] = pd.to_datetime(df['Date'])
+    df.set_index('Date', inplace=True)
+    df = df.sort_index()
+    return df
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
+df = load_data()
+
+# Encode categorical columns
+categorical_cols = ['Industry', 'Chemical_Type', 'Weather_Condition', 'Production_Scale']
+label_encoders = {}
+for col in categorical_cols:
+    le = LabelEncoder()
+    df[col] = le.fit_transform(df[col])
+    label_encoders[col] = le
+
+# Feature selection and scaling
+features = ['Effluent_Volume_Liters', 'Chemical_Concentration_ppm', 'pH', 'TDS_ppm', 'Conductivity_uS', 'Production_Scale']
+scaler = MinMaxScaler()
+df_scaled = scaler.fit_transform(df[features])
+df_scaled = pd.DataFrame(df_scaled, columns=features)
+
+# Train-Test Split
+train_size = int(len(df) * 0.8)
+train, test = df_scaled[:train_size], df_scaled[train_size:]
+
+# Prepare LSTM input data
+X_train, y_train = train[:-1], train[1:]
+X_test, y_test = test[:-1], test[1:]
+X_train = np.array(X_train).reshape((X_train.shape[0], X_train.shape[1], 1))
+X_test = np.array(X_test).reshape((X_test.shape[0], X_test.shape[1], 1))
+
+# Build LSTM Model
+model = Sequential([
+    LSTM(50, return_sequences=True, input_shape=(X_train.shape[1], 1)),
+    LSTM(50),
+    Dense(1)
+])
+model.compile(optimizer='adam', loss='mse')
+model.fit(X_train, y_train, epochs=10, batch_size=16)
+
+# Future Prediction Function
+def predict_future(years=5):
+    future_dates = pd.date_range(df.index[-1], periods=years * 12, freq='M')
+    future_preds = model.predict(X_test[-len(future_dates):])
+    future_preds = future_preds.reshape(-1, 6)
+    future_preds_inversed = scaler.inverse_transform(future_preds)
+    return pd.DataFrame({'Date': future_dates, 'Predicted_Concentration': future_preds.flatten()})
+
+future_trends = predict_future(6)
+
+# Streamlit UI Elements
+st.title("🌊 Effluent Prediction Dashboard")
+st.write(
     """
-
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
-
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
-
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
-
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
-
-    return gdp_df
-
-gdp_df = get_gdp_data()
-
-# -----------------------------------------------------------------------------
-# Draw the actual page
-
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
+    This app predicts chemical concentrations in industrial effluents based on historical data.
+    It helps industries monitor environmental compliance and take necessary actions.
+    Select parameters below to explore predictions!
+    """
 )
 
-''
-''
+industry = st.selectbox("Select Industry", df.index.unique())
+year = st.slider("Select Year", 2025, 2030, 2027)
 
+# Fetch prediction for selected year
+predicted_value = future_trends[future_trends['Date'].dt.year == year]['Predicted_Concentration'].values[0]
+effluent_volume = np.random.uniform(30000, 60000)
+tds = np.random.uniform(500, 2000)
+conductivity = np.random.uniform(800, 2000)
+regulatory_limit = 100
 
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
+# Generate Report
+def generate_report(industry, year, concentration, reg_limit, effluent_volume, tds, conductivity):
+    output = []
+    if concentration > reg_limit:
+        output.append(f"The chemical concentration for {industry} in {year} is {concentration:.2f} ppm, exceeding the limit of {reg_limit} ppm. Action required!")
+    else:
+        output.append(f"The chemical concentration for {industry} in {year} is {concentration:.2f} ppm, within safe limits.")
+    if effluent_volume > 50000:
+        output.append(f"Effluent volume is high ({effluent_volume:.2f} liters), indicating increased industrial output.")
+    if tds > 1000:
+        output.append(f"TDS level ({tds:.2f} ppm) suggests potential water quality issues.")
+    if conductivity > 1500:
+        output.append(f"Conductivity ({conductivity:.2f} µS) indicates high ion concentration.")
+    return "\n".join(output)
 
-st.header(f'GDP in {to_year}', divider='gray')
+st.write(generate_report(industry, year, predicted_value, regulatory_limit, effluent_volume, tds, conductivity))
 
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+# Data Visualization
+df_chart = future_trends.copy()
+df_chart['Year'] = df_chart['Date'].dt.year
+chart = (
+    alt.Chart(df_chart)
+    .mark_line()
+    .encode(
+        x=alt.X("Year:N", title="Year"),
+        y=alt.Y("Predicted_Concentration:Q", title="Predicted Chemical Concentration (ppm)"),
+    )
+    .properties(height=320)
+)
+st.altair_chart(chart, use_container_width=True)
